@@ -1,5 +1,5 @@
 #
-#  Copyright (C) 2016 Google, Inc.
+#  Copyright (C) 2017 Google, Inc.
 #
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@ LOCAL_MODULE_OWNER := google
 LOCAL_STATIC_JAVA_LIBRARIES := guava android-common sl4a.Utils
 LOCAL_JAVA_LIBRARIES := telephony-common
 LOCAL_JAVA_LIBRARIES += ims-common
+LOCAL_JAVA_LIBRARIES += bouncycastle
 
 LOCAL_SRC_FILES := $(call all-java-files-under, src/com/googlecode/android_scripting)
 LOCAL_SRC_FILES += $(call all-java-files-under, src/org/apache/commons/codec)

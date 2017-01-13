@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016 The Android Open Source Project
+ * Copyright (C) 2017 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,13 +16,6 @@
 
 package com.googlecode.android_scripting.facade.wifi;
 
-import com.googlecode.android_scripting.facade.EventFacade;
-import com.googlecode.android_scripting.facade.FacadeManager;
-import com.googlecode.android_scripting.jsonrpc.RpcReceiver;
-import com.googlecode.android_scripting.rpc.Rpc;
-import com.googlecode.android_scripting.rpc.RpcOptional;
-import com.googlecode.android_scripting.rpc.RpcParameter;
-
 import android.app.Service;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -30,18 +23,19 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.net.wifi.RttManager;
 import android.net.wifi.RttManager.RttResult;
+import android.net.wifi.aware.AttachCallback;
 import android.net.wifi.aware.ConfigRequest;
+import android.net.wifi.aware.DiscoverySession;
+import android.net.wifi.aware.DiscoverySessionCallback;
+import android.net.wifi.aware.IdentityChangedListener;
+import android.net.wifi.aware.PeerHandle;
 import android.net.wifi.aware.PublishConfig;
+import android.net.wifi.aware.PublishDiscoverySession;
 import android.net.wifi.aware.SubscribeConfig;
+import android.net.wifi.aware.SubscribeDiscoverySession;
 import android.net.wifi.aware.TlvBufferUtils;
-import android.net.wifi.aware.WifiAwareAttachCallback;
-import android.net.wifi.aware.WifiAwareDiscoveryBaseSession;
-import android.net.wifi.aware.WifiAwareDiscoverySessionCallback;
-import android.net.wifi.aware.WifiAwareIdentityChangedListener;
 import android.net.wifi.aware.WifiAwareManager;
-import android.net.wifi.aware.WifiAwarePublishDiscoverySession;
 import android.net.wifi.aware.WifiAwareSession;
-import android.net.wifi.aware.WifiAwareSubscribeDiscoverySession;
 import android.os.Bundle;
 import android.os.Parcelable;
 import android.os.RemoteException;
@@ -51,9 +45,18 @@ import com.android.internal.annotations.GuardedBy;
 
 import libcore.util.HexEncoding;
 
+import com.googlecode.android_scripting.facade.EventFacade;
+import com.googlecode.android_scripting.facade.FacadeManager;
+import com.googlecode.android_scripting.jsonrpc.RpcReceiver;
+import com.googlecode.android_scripting.rpc.Rpc;
+import com.googlecode.android_scripting.rpc.RpcOptional;
+import com.googlecode.android_scripting.rpc.RpcParameter;
+
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+
+import java.util.List;
 
 /**
  * WifiAwareManager functions.
@@ -71,7 +74,7 @@ public class WifiAwareManagerFacade extends RpcReceiver {
     @GuardedBy("mLock")
     private int mNextDiscoverySessionId = 1;
     @GuardedBy("mLock")
-    private SparseArray<WifiAwareDiscoveryBaseSession> mDiscoverySessions = new SparseArray<>();
+    private SparseArray<DiscoverySession> mDiscoverySessions = new SparseArray<>();
     private int getNextDiscoverySessionId() {
         synchronized (mLock) {
             return mNextDiscoverySessionId++;
@@ -161,7 +164,8 @@ public class WifiAwareManagerFacade extends RpcReceiver {
         if (j.has("MatchFilter")) {
             TlvBufferUtils.TlvConstructor constructor = getFilterData(
                     j.getJSONObject("MatchFilter"));
-            builder.setMatchFilter(constructor.getArray());
+            builder.setMatchFilter(
+                    new TlvBufferUtils.TlvIterable(0, 1, constructor.getArray()).toList());
         }
 
         if (j.has("PublishType")) {
@@ -199,7 +203,8 @@ public class WifiAwareManagerFacade extends RpcReceiver {
         if (j.has("MatchFilter")) {
             TlvBufferUtils.TlvConstructor constructor = getFilterData(
                     j.getJSONObject("MatchFilter"));
-            builder.setMatchFilter(constructor.getArray());
+            builder.setMatchFilter(
+                    new TlvBufferUtils.TlvIterable(0, 1, constructor.getArray()).toList());
         }
 
         if (j.has("SubscribeType")) {
@@ -351,7 +356,7 @@ public class WifiAwareManagerFacade extends RpcReceiver {
             @RpcParameter(name = "sessionId", description = "The discovery session ID returned when session was created using publish or subscribe") Integer sessionId)
             throws RemoteException {
         synchronized (mLock) {
-            WifiAwareDiscoveryBaseSession session = mDiscoverySessions.get(sessionId);
+            DiscoverySession session = mDiscoverySessions.get(sessionId);
             if (session == null) {
                 throw new IllegalStateException(
                         "Calling WifiAwareTerminateSession before session (session ID "
@@ -375,7 +380,7 @@ public class WifiAwareManagerFacade extends RpcReceiver {
             @RpcParameter(name = "retryCount", description = "Number of retries (0 for none) if "
                     + "transmission fails due to no ACK reception") Integer retryCount)
                     throws RemoteException {
-        WifiAwareDiscoveryBaseSession session;
+        DiscoverySession session;
         synchronized (mLock) {
             session = mDiscoverySessions.get(sessionId);
         }
@@ -392,7 +397,7 @@ public class WifiAwareManagerFacade extends RpcReceiver {
         synchronized (mLock) {
             mMessageStartTime.put(messageId, System.currentTimeMillis());
         }
-        session.sendMessage(new WifiAwareManager.PeerHandle(peerId), messageId, bytes, retryCount);
+        session.sendMessage(new PeerHandle(peerId), messageId, bytes, retryCount);
     }
 
     @Rpc(description = "Start peer-to-peer Aware ranging")
@@ -400,7 +405,7 @@ public class WifiAwareManagerFacade extends RpcReceiver {
             @RpcParameter(name = "callbackId") Integer callbackId,
             @RpcParameter(name = "sessionId", description = "The session ID returned when session was created using publish or subscribe") Integer sessionId,
             @RpcParameter(name = "rttParams", description = "RTT session parameters.") JSONArray rttParams) throws RemoteException, JSONException {
-        WifiAwareDiscoveryBaseSession session;
+        DiscoverySession session;
         synchronized (mLock) {
             session = mDiscoverySessions.get(sessionId);
         }
@@ -418,15 +423,13 @@ public class WifiAwareManagerFacade extends RpcReceiver {
 
     @Rpc(description = "Create a network specifier to be used when specifying a Aware network request")
     public String wifiAwareCreateNetworkSpecifier(
-            @RpcParameter(name = "role", description = "The role of the device: Initiator (0) or Responder (1)")
-                    Integer role,
             @RpcParameter(name = "sessionId", description = "The session ID returned when session was created using publish or subscribe")
                     Integer sessionId,
             @RpcParameter(name = "peerId", description = "The ID of the peer (obtained through OnMatch or OnMessageReceived")
                     Integer peerId,
             @RpcParameter(name = "token", description = "Arbitrary token message to be sent to peer as part of data-path creation process")
                     String token) {
-        WifiAwareDiscoveryBaseSession session;
+        DiscoverySession session;
         synchronized (mLock) {
             session = mDiscoverySessions.get(sessionId);
         }
@@ -436,10 +439,10 @@ public class WifiAwareManagerFacade extends RpcReceiver {
                             + sessionId + " is ready");
         }
         byte[] bytes = token.getBytes();
-        return session.createNetworkSpecifier(role, new WifiAwareManager.PeerHandle(peerId), bytes);
+        return session.createNetworkSpecifier(new PeerHandle(peerId), bytes);
     }
 
-    private class AwareAttachCallbackPostsEvents extends WifiAwareAttachCallback {
+    private class AwareAttachCallbackPostsEvents extends AttachCallback {
         private int mSessionId;
         private long mCreateTimestampMs;
 
@@ -470,7 +473,7 @@ public class WifiAwareManagerFacade extends RpcReceiver {
         }
     }
 
-    private class AwareIdentityChangeListenerPostsEvents extends WifiAwareIdentityChangedListener {
+    private class AwareIdentityChangeListenerPostsEvents extends IdentityChangedListener {
         private int mSessionId;
 
         public AwareIdentityChangeListenerPostsEvents(int sessionId) {
@@ -488,7 +491,7 @@ public class WifiAwareManagerFacade extends RpcReceiver {
     }
 
     private class AwareDiscoverySessionCallbackPostsEvents extends
-            WifiAwareDiscoverySessionCallback {
+            DiscoverySessionCallback {
         private int mDiscoverySessionId;
         private long mCreateTimestampMs;
 
@@ -498,7 +501,7 @@ public class WifiAwareManagerFacade extends RpcReceiver {
         }
 
         @Override
-        public void onPublishStarted(WifiAwarePublishDiscoverySession discoverySession) {
+        public void onPublishStarted(PublishDiscoverySession discoverySession) {
             synchronized (mLock) {
                 mDiscoverySessions.put(mDiscoverySessionId, discoverySession);
             }
@@ -511,7 +514,7 @@ public class WifiAwareManagerFacade extends RpcReceiver {
         }
 
         @Override
-        public void onSubscribeStarted(WifiAwareSubscribeDiscoverySession discoverySession) {
+        public void onSubscribeStarted(SubscribeDiscoverySession discoverySession) {
             synchronized (mLock) {
                 mDiscoverySessions.put(mDiscoverySessionId, discoverySession);
             }
@@ -538,21 +541,21 @@ public class WifiAwareManagerFacade extends RpcReceiver {
         }
 
         @Override
-        public void onSessionTerminated(int reason) {
+        public void onSessionTerminated() {
             Bundle mResults = new Bundle();
             mResults.putInt("discoverySessionId", mDiscoverySessionId);
-            mResults.putInt("reason", reason);
             mEventFacade.postEvent("WifiAwareSessionOnSessionTerminated", mResults);
         }
 
         @Override
-        public void onServiceDiscovered(WifiAwareManager.PeerHandle peerHandle,
-                byte[] serviceSpecificInfo, byte[] matchFilter) {
+        public void onServiceDiscovered(PeerHandle peerHandle,
+                byte[] serviceSpecificInfo, List<byte[]> matchFilter) {
             Bundle mResults = new Bundle();
             mResults.putInt("discoverySessionId", mDiscoverySessionId);
             mResults.putInt("peerId", peerHandle.peerId);
             mResults.putByteArray("serviceSpecificInfo", serviceSpecificInfo); // TODO: base64
-            mResults.putByteArray("matchFilter", matchFilter); // TODO: base64
+            mResults.putByteArray("matchFilter", new TlvBufferUtils.TlvConstructor(0,
+                    1).allocateAndPut(matchFilter).getArray()); // TODO: base64
             mResults.putLong("timestampMs", System.currentTimeMillis());
             mEventFacade.postEvent("WifiAwareSessionOnServiceDiscovered", mResults);
         }
@@ -590,7 +593,7 @@ public class WifiAwareManagerFacade extends RpcReceiver {
         }
 
         @Override
-        public void onMessageReceived(WifiAwareManager.PeerHandle peerHandle, byte[] message) {
+        public void onMessageReceived(PeerHandle peerHandle, byte[] message) {
             Bundle mResults = new Bundle();
             mResults.putInt("discoverySessionId", mDiscoverySessionId);
             mResults.putInt("peerId", peerHandle.peerId);
