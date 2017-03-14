@@ -16,6 +16,7 @@
 
 package com.googlecode.android_scripting.facade.telephony;
 
+import android.annotation.Nullable;
 import android.app.Service;
 import android.content.ContentResolver;
 import android.content.ContentValues;
@@ -61,6 +62,7 @@ import com.googlecode.android_scripting.rpc.RpcDefault;
 import com.googlecode.android_scripting.rpc.RpcOptional;
 import com.googlecode.android_scripting.rpc.RpcParameter;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 
@@ -111,6 +113,19 @@ public class TelephonyManagerFacade extends RpcReceiver {
         mAndroidFacade = manager.getReceiver(AndroidFacade.class);
         mEventFacade = manager.getReceiver(EventFacade.class);
         mSubscriptionManager = SubscriptionManager.from(mService);
+    }
+
+    /**
+    * Reset TelephonyManager settings to factory default.
+    * @param subId the subriber id to be reset, use default id if not provided.
+    */
+    @Rpc(description = "Resets TelephonyManager settings to factory default.")
+    public void telephonyFactoryReset(
+            @RpcOptional @RpcParameter(name = "subId") Integer subId) {
+        if (subId == null) {
+            subId = SubscriptionManager.getDefaultVoiceSubscriptionId();
+        }
+        mTelephonyManager.factoryReset(subId);
     }
 
     @Rpc(description = "Set network preference.")
@@ -1137,6 +1152,22 @@ public class TelephonyManagerFacade extends RpcReceiver {
     @Rpc(description = "Returns the sim count.")
     public int telephonyGetSimCount() {
         return mTelephonyManager.getSimCount();
+    }
+
+    /**
+     * Get the list of Forbidden PLMNs stored on the USIM
+     * profile of the SIM for the default subscription.
+     */
+    @Rpc(description = "Returns a list of forbidden PLMNs")
+    public @Nullable List<String> telephonyGetForbiddenPlmns() {
+        String[] fplmns = mTelephonyManager.getForbiddenPlmns(
+                SubscriptionManager.getDefaultSubscriptionId(),
+                TelephonyManager.APPTYPE_USIM);
+
+        if (fplmns != null) {
+            return Arrays.asList(fplmns);
+        }
+        return null;
     }
 
     private StateChangeListener getStateChangeListenerForSubscription(
