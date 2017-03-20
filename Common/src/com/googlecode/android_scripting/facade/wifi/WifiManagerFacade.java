@@ -517,8 +517,11 @@ public class WifiManagerFacade extends RpcReceiver {
         return mWifi.getWifiState() == WifiManager.WIFI_STATE_ENABLED;
     }
 
-    @RpcDeprecated(value = "wifiConnectByConfig")
+    /**
+    * @deprecated Use {@link #wifiConnectByConfig(config)} instead.
+    */
     @Rpc(description = "Connects to the network with the given configuration")
+    @Deprecated
     public Boolean wifiConnect(@RpcParameter(name = "config") JSONObject config)
             throws JSONException {
         try {
@@ -531,8 +534,11 @@ public class WifiManagerFacade extends RpcReceiver {
         return true;
     }
 
-    @RpcDeprecated(value = "wifiConnectByConfig")
-    @Rpc(description = "Connect to Enterprise network with given configuration")
+    /**
+    * @deprecated Use {@link #wifiConnectByConfig(config)} instead.
+    */
+    @Rpc(description = "Connects to the network with the given configuration")
+    @Deprecated
     public Boolean wifiEnterpriseConnect(@RpcParameter(name = "config")
             JSONObject config) throws JSONException, GeneralSecurityException {
         try {
@@ -590,11 +596,11 @@ public class WifiManagerFacade extends RpcReceiver {
      * @throws JSONException
      */
     @Rpc(description = "Add or update a Passpoint configuration")
-    public boolean addUpdatePasspointConfig(@RpcParameter(
+    public void addUpdatePasspointConfig(@RpcParameter(
             name = "config") JSONObject config)
             throws JSONException,CertificateException, IOException {
         PasspointConfiguration passpointConfig = genWifiPasspointConfig(config);
-        return mWifi.addOrUpdatePasspointConfiguration(passpointConfig);
+        mWifi.addOrUpdatePasspointConfiguration(passpointConfig);
     }
 
     /**
@@ -602,10 +608,10 @@ public class WifiManagerFacade extends RpcReceiver {
      * @param fqdn The FQDN of the passpoint configuration to be removed
      * @return true on success; false otherwise
      */
-    @Rpc(description = "Remove a Passpoint configuration", returns = "true if operation succeeds; false otherwise")
-    public boolean removePasspointConfig(
+    @Rpc(description = "Remove a Passpoint configuration")
+    public void removePasspointConfig(
             @RpcParameter(name = "fqdn") String fqdn) {
-        return mWifi.removePasspointConfiguration(fqdn);
+        mWifi.removePasspointConfiguration(fqdn);
     }
 
     /**
