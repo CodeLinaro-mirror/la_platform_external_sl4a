@@ -227,6 +227,19 @@ public class BluetoothFacade extends RpcReceiver {
         }
     }
 
+    @Rpc(description = "Fetch UUIDS with SDP")
+    public boolean bluetoothFetchUuidsWithSdp(
+            @RpcParameter(name = "address", description = "Bluetooth Address For Target Device")
+            String address) {
+        try {
+            BluetoothDevice mDevice;
+            mDevice = mBluetoothAdapter.getRemoteDevice(address);
+            return mDevice.fetchUuidsWithSdp();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     @Rpc(description = "Get local Bluetooth device name")
     public String bluetoothGetLocalName() {
         return mBluetoothAdapter.getName();
@@ -337,14 +350,6 @@ public class BluetoothFacade extends RpcReceiver {
         while (bluetoothIsDiscovering())
             ;
         return DiscoveredDevices.values();
-    }
-
-    @Rpc(description = "Enable or disable the Bluetooth HCI snoop log")
-    public boolean bluetoothConfigHciSnoopLog(
-            @RpcParameter(name = "value", description = "enable or disable log")
-            Boolean value
-            ) {
-        return mBluetoothAdapter.configHciSnoopLog(value);
     }
 
     @Rpc(description = "Get Bluetooth controller activity energy info.")
