@@ -1096,7 +1096,6 @@ public class TelephonyManagerFacade extends RpcReceiver {
             mTelephonyManager.getDataState());
     }
 
-
     @Rpc(description = "Returns Total Rx Bytes.")
     public long getTotalRxBytes() {
         return TrafficStats.getTotalRxBytes();
@@ -1208,8 +1207,7 @@ public class TelephonyManagerFacade extends RpcReceiver {
 
     @Rpc(description = "Returns current signal strength for default subscription ID.")
     public SignalStrength telephonyGetSignalStrength() {
-        return telephonyGetSignalStrengthForSubscription(
-                               SubscriptionManager.DEFAULT_SUBSCRIPTION_ID);
+        return mTelephonyManager.getSignalStrength();
     }
 
     @Rpc(description = "Returns current signal strength for specified subscription ID.")
