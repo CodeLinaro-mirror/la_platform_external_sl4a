@@ -45,6 +45,8 @@ import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiEnterpriseConfig;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiScanner.ScanData;
+import android.net.wifi.WpsInfo;
+import android.net.wifi.p2p.WifiP2pConfig;
 import android.net.wifi.p2p.WifiP2pDevice;
 import android.net.wifi.p2p.WifiP2pGroup;
 import android.net.wifi.p2p.WifiP2pInfo;
@@ -56,18 +58,23 @@ import android.telecom.PhoneAccount;
 import android.telecom.PhoneAccountHandle;
 import android.telecom.VideoProfile;
 import android.telecom.VideoProfile.CameraCapabilities;
+import android.telephony.CellIdentity;
 import android.telephony.CellIdentityCdma;
 import android.telephony.CellIdentityGsm;
 import android.telephony.CellIdentityLte;
+import android.telephony.CellIdentityTdscdma;
 import android.telephony.CellIdentityWcdma;
+import android.telephony.CellInfo;
 import android.telephony.CellInfoCdma;
 import android.telephony.CellInfoGsm;
 import android.telephony.CellInfoLte;
+import android.telephony.CellInfoTdscdma;
 import android.telephony.CellInfoWcdma;
 import android.telephony.CellLocation;
 import android.telephony.CellSignalStrengthCdma;
 import android.telephony.CellSignalStrengthGsm;
 import android.telephony.CellSignalStrengthLte;
+import android.telephony.CellSignalStrengthTdscdma;
 import android.telephony.CellSignalStrengthWcdma;
 import android.telephony.ModemActivityInfo;
 import android.telephony.NeighboringCellInfo;
@@ -266,6 +273,9 @@ public class JsonBuilder {
         if (data instanceof WifiConfiguration) {
             return buildWifiConfiguration((WifiConfiguration) data);
         }
+        if (data instanceof WifiP2pConfig) {
+            return buildWifiP2pConfig((WifiP2pConfig) data);
+        }
         if (data instanceof WifiP2pDevice) {
             return buildWifiP2pDevice((WifiP2pDevice) data);
         }
@@ -300,17 +310,8 @@ public class JsonBuilder {
         if (data instanceof Object[]) {
             return buildJSONArray((Object[]) data);
         }
-        if (data instanceof CellInfoLte) {
-            return buildCellInfoLte((CellInfoLte) data);
-        }
-        if (data instanceof CellInfoWcdma) {
-            return buildCellInfoWcdma((CellInfoWcdma) data);
-        }
-        if (data instanceof CellInfoGsm) {
-            return buildCellInfoGsm((CellInfoGsm) data);
-        }
-        if (data instanceof CellInfoCdma) {
-            return buildCellInfoCdma((CellInfoCdma) data);
+        if (data instanceof CellInfo) {
+            return buildCellInfo((CellInfo) data);
         }
         if (data instanceof Call) {
             return buildCall((Call) data);
@@ -741,15 +742,40 @@ public class JsonBuilder {
         return result;
     }
 
-    private static JSONObject buildCellInfoLte(CellInfoLte data)
-            throws JSONException {
+    private static JSONObject buildCellInfo(CellInfo data) throws JSONException {
         JSONObject result = new JSONObject();
-        result.put("rat", "lte");
         result.put("registered", data.isRegistered());
-        CellIdentityLte cellidentity = ((CellInfoLte) data).getCellIdentity();
-        CellSignalStrengthLte signalstrength = ((CellInfoLte) data).getCellSignalStrength();
+        result.put("connection_status", data.getCellConnectionStatus());
+        result.put("timestamp", data.getTimeStamp());
+
+        CellIdentity cid = data.getCellIdentity();
+        result.put("channel_number", cid.getChannelNumber());
+        result.put("alpha_long", cid.getOperatorAlphaLong());
+        result.put("alpha_short", cid.getOperatorAlphaShort());
+
+        if (data instanceof CellInfoLte) {
+            return buildCellInfoLte((CellInfoLte) data, result);
+        } else if (data instanceof CellInfoWcdma) {
+            return buildCellInfoWcdma((CellInfoWcdma) data, result);
+        } else if (data instanceof CellInfoTdscdma) {
+            return buildCellInfoTdscdma((CellInfoTdscdma) data, result);
+        } else if (data instanceof CellInfoGsm) {
+            return buildCellInfoGsm((CellInfoGsm) data, result);
+        } else if (data instanceof CellInfoCdma) {
+            return buildCellInfoCdma((CellInfoCdma) data, result);
+        }
+        return result;
+    }
+
+    private static JSONObject buildCellInfoLte(CellInfoLte data, JSONObject result)
+            throws JSONException {
+        result.put("rat", "lte");
+        CellIdentityLte cellidentity = data.getCellIdentity();
+        CellSignalStrengthLte signalstrength = data.getCellSignalStrength();
         result.put("mcc", cellidentity.getMcc());
         result.put("mnc", cellidentity.getMnc());
+        result.put("mcc_string", cellidentity.getMccString());
+        result.put("mnc_string", cellidentity.getMncString());
         result.put("cid", cellidentity.getCi());
         result.put("pcid", cellidentity.getPci());
         result.put("tac", cellidentity.getTac());
@@ -760,15 +786,15 @@ public class JsonBuilder {
         return result;
     }
 
-    private static JSONObject buildCellInfoGsm(CellInfoGsm data)
+    private static JSONObject buildCellInfoGsm(CellInfoGsm data, JSONObject result)
             throws JSONException {
-        JSONObject result = new JSONObject();
         result.put("rat", "gsm");
-        result.put("registered", data.isRegistered());
-        CellIdentityGsm cellidentity = ((CellInfoGsm) data).getCellIdentity();
-        CellSignalStrengthGsm signalstrength = ((CellInfoGsm) data).getCellSignalStrength();
+        CellIdentityGsm cellidentity = data.getCellIdentity();
+        CellSignalStrengthGsm signalstrength = data.getCellSignalStrength();
         result.put("mcc", cellidentity.getMcc());
         result.put("mnc", cellidentity.getMnc());
+        result.put("mcc_string", cellidentity.getMccString());
+        result.put("mnc_string", cellidentity.getMncString());
         result.put("cid", cellidentity.getCid());
         result.put("lac", cellidentity.getLac());
         result.put("bsic", cellidentity.getBsic());
@@ -778,15 +804,15 @@ public class JsonBuilder {
         return result;
     }
 
-    private static JSONObject buildCellInfoWcdma(CellInfoWcdma data)
+    private static JSONObject buildCellInfoWcdma(CellInfoWcdma data, JSONObject result)
             throws JSONException {
-        JSONObject result = new JSONObject();
         result.put("rat", "wcdma");
-        result.put("registered", data.isRegistered());
-        CellIdentityWcdma cellidentity = ((CellInfoWcdma) data).getCellIdentity();
-        CellSignalStrengthWcdma signalstrength = ((CellInfoWcdma) data).getCellSignalStrength();
+        CellIdentityWcdma cellidentity = data.getCellIdentity();
+        CellSignalStrengthWcdma signalstrength = data.getCellSignalStrength();
         result.put("mcc", cellidentity.getMcc());
         result.put("mnc", cellidentity.getMnc());
+        result.put("mcc_string", cellidentity.getMccString());
+        result.put("mnc_string", cellidentity.getMncString());
         result.put("cid", cellidentity.getCid());
         result.put("lac", cellidentity.getLac());
         result.put("psc", cellidentity.getPsc());
@@ -795,13 +821,27 @@ public class JsonBuilder {
         return result;
     }
 
-    private static JSONObject buildCellInfoCdma(CellInfoCdma data)
+    private static JSONObject buildCellInfoTdscdma(CellInfoTdscdma data, JSONObject result)
             throws JSONException {
-        JSONObject result = new JSONObject();
+        result.put("rat", "tdscdma");
+        CellIdentityTdscdma cellidentity = data.getCellIdentity();
+        CellSignalStrengthTdscdma signalstrength = data.getCellSignalStrength();
+        result.put("mcc_string", cellidentity.getMccString());
+        result.put("mnc_string", cellidentity.getMncString());
+        result.put("cid", cellidentity.getCid());
+        result.put("lac", cellidentity.getLac());
+        result.put("cpid", cellidentity.getCpid());
+        result.put("signal_strength", signalstrength.getDbm());
+        result.put("asulevel", signalstrength.getAsuLevel());
+        return result;
+    }
+
+    private static JSONObject buildCellInfoCdma(CellInfoCdma data, JSONObject result)
+            throws JSONException {
         result.put("rat", "cdma");
         result.put("registered", data.isRegistered());
-        CellIdentityCdma cellidentity = ((CellInfoCdma) data).getCellIdentity();
-        CellSignalStrengthCdma signalstrength = ((CellInfoCdma) data).getCellSignalStrength();
+        CellIdentityCdma cellidentity = data.getCellIdentity();
+        CellSignalStrengthCdma signalstrength = data.getCellSignalStrength();
         result.put("network_id", cellidentity.getNetworkId());
         result.put("system_id", cellidentity.getSystemId());
         result.put("basestation_id", cellidentity.getBasestationId());
@@ -986,6 +1026,19 @@ public class JsonBuilder {
         config.put("providerFriendlyName", data.providerFriendlyName);
         config.put("isPasspoint", data.isPasspoint());
         config.put("hiddenSSID", data.hiddenSSID);
+        if (data.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.SAE)) {
+            config.put("security", "SAE");
+        } else if (data.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.WPA_PSK)) {
+            config.put("security", "PSK");
+        } else if (data.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.OWE)) {
+            config.put("security", "OWE");
+        } else if (data.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.SUITE_B_192)) {
+            config.put("security", "SUITE_B_192");
+        } else if (data.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.WPA_EAP)) {
+            config.put("security", "EAP");
+        } else if (data.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.NONE)) {
+            config.put("security", "NONE");
+        }
         if (data.status == WifiConfiguration.Status.CURRENT) {
             config.put("status", "CURRENT");
         } else if (data.status == WifiConfiguration.Status.DISABLED) {
@@ -1020,11 +1073,31 @@ public class JsonBuilder {
         return config;
     }
 
+    private static JSONObject buildWpsInfo(WpsInfo data)
+            throws JSONException {
+        JSONObject wpsInfo = new JSONObject();
+        wpsInfo.put("setup", data.setup);
+        wpsInfo.put("BSSID", data.BSSID);
+        wpsInfo.put("pin", data.pin);
+        return wpsInfo;
+    }
+
+    private static JSONObject buildWifiP2pConfig(WifiP2pConfig data)
+            throws JSONException {
+        JSONObject wifiP2pConfig = new JSONObject();
+        wifiP2pConfig.put("deviceAddress", data.deviceAddress);
+        wifiP2pConfig.put("wpsInfo", buildWpsInfo(data.wps));
+        wifiP2pConfig.put("groupOwnerIntent", data.groupOwnerIntent);
+        wifiP2pConfig.put("netId", data.netId);
+        return wifiP2pConfig;
+    }
+
     private static JSONObject buildWifiP2pDevice(WifiP2pDevice data)
             throws JSONException {
         JSONObject deviceInfo = new JSONObject();
         deviceInfo.put("Name", data.deviceName);
         deviceInfo.put("Address", data.deviceAddress);
+        deviceInfo.put("GroupCapability", data.groupCapability);
         return deviceInfo;
     }
 
