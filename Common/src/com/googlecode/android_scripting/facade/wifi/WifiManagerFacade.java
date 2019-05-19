@@ -62,6 +62,7 @@ import android.provider.Settings.Global;
 import android.provider.Settings.SettingNotFoundException;
 import android.text.TextUtils;
 import android.util.Base64;
+import android.util.SparseArray;
 
 import com.android.internal.annotations.GuardedBy;
 
@@ -119,16 +120,19 @@ public class WifiManagerFacade extends RpcReceiver {
     private final IntentFilter mScanFilter;
     private final IntentFilter mStateChangeFilter;
     private final IntentFilter mTetherFilter;
+    private final IntentFilter mNetworkSuggestionStateChangeFilter;
     private final WifiScanReceiver mScanResultsAvailableReceiver;
     private final WifiStateChangeReceiver mStateChangeReceiver;
+    private final WifiNetworkSuggestionStateChangeReceiver mNetworkSuggestionStateChangeReceiver;
     private final HandlerThread mCallbackHandlerThread;
     private final Object mCallbackLock = new Object();
     private final Map<NetworkSpecifier, NetworkCallback> mNetworkCallbacks = new HashMap<>();
     private boolean mTrackingWifiStateChange;
     private boolean mTrackingTetherStateChange;
+    private boolean mTrackingNetworkSuggestionStateChange;
     @GuardedBy("mCallbackLock")
     private NetworkRequestUserSelectionCallback mNetworkRequestUserSelectionCallback;
-
+    private final SparseArray<SoftApCallbackImp> mSoftapCallbacks;
 
     private final BroadcastReceiver mTetherStateReceiver = new BroadcastReceiver() {
         @Override
@@ -214,6 +218,47 @@ public class WifiManagerFacade extends RpcReceiver {
         }
     };
 
+    private static class SoftApCallbackImp implements WifiManager.SoftApCallback {
+        // A monotonic increasing counter for softap callback ids.
+        private static int sCount = 0;
+
+        private final int mId;
+        private final EventFacade mEventFacade;
+        private final String mEventStr;
+
+        SoftApCallbackImp(EventFacade eventFacade) {
+            sCount++;
+            mId = sCount;
+            mEventFacade = eventFacade;
+            mEventStr = mEventType + "SoftApCallback-" + mId + "-";
+        }
+
+        @Override
+        public void onStateChanged(int state, int failureReason) {
+            Bundle msg = new Bundle();
+            msg.putInt("State", state);
+            msg.putInt("FailureReason", failureReason);
+            mEventFacade.postEvent(mEventStr + "OnStateChanged", msg);
+        }
+
+        @Override
+        public void onNumClientsChanged(int numClients) {
+            Bundle msg = new Bundle();
+            msg.putInt("NumClients", numClients);
+            mEventFacade.postEvent(mEventStr + "OnNumClientsChanged", msg);
+        }
+
+        @Override
+        public void onStaDisconnected(String Macaddr, int numClients) {
+          // TODO (b/129498568) Implement as necessary
+        }
+
+        @Override
+        public void onStaConnected(String Macaddr,int numClients) {
+          // TODO (b/129498568) Implement as necessary
+        }
+    };
+
     private WifiLock mLock = null;
     private boolean mIsConnected = false;
 
@@ -230,17 +275,22 @@ public class WifiManagerFacade extends RpcReceiver {
         mStateChangeFilter.addAction(WifiManager.SUPPLICANT_STATE_CHANGED_ACTION);
         mStateChangeFilter.addAction(WifiManager.SUPPLICANT_CONNECTION_CHANGE_ACTION);
         mStateChangeFilter.addAction(WifiManager.WIFI_STATE_CHANGED_ACTION);
-        mStateChangeFilter.addAction(WifiManager.ACTION_WIFI_NETWORK_SUGGESTION_POST_CONNECTION);
         mStateChangeFilter.setPriority(IntentFilter.SYSTEM_HIGH_PRIORITY - 1);
 
         mTetherFilter = new IntentFilter(WifiManager.WIFI_AP_STATE_CHANGED_ACTION);
         mTetherFilter.addAction(ConnectivityManager.ACTION_TETHER_STATE_CHANGED);
 
+        mNetworkSuggestionStateChangeFilter = new IntentFilter(
+                WifiManager.ACTION_WIFI_NETWORK_SUGGESTION_POST_CONNECTION);
+
         mScanResultsAvailableReceiver = new WifiScanReceiver(mEventFacade);
         mStateChangeReceiver = new WifiStateChangeReceiver();
+        mNetworkSuggestionStateChangeReceiver = new WifiNetworkSuggestionStateChangeReceiver();
         mTrackingWifiStateChange = false;
         mTrackingTetherStateChange = false;
+        mTrackingNetworkSuggestionStateChange = false;
         mCallbackHandlerThread.start();
+        mSoftapCallbacks = new SparseArray<>();
     }
 
     private void makeLock(int wifiMode) {
@@ -357,7 +407,15 @@ public class WifiManagerFacade extends RpcReceiver {
                 Bundle msg = new Bundle();
                 msg.putBoolean("enabled", enabled);
                 mEventFacade.postEvent("WifiStateChanged", msg);
-            } else if (action.equals(WifiManager.ACTION_WIFI_NETWORK_SUGGESTION_POST_CONNECTION)) {
+            }
+        }
+    }
+
+    public class WifiNetworkSuggestionStateChangeReceiver extends BroadcastReceiver {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String action = intent.getAction();
+            if (action.equals(WifiManager.ACTION_WIFI_NETWORK_SUGGESTION_POST_CONNECTION)) {
                 WifiNetworkSuggestion networkSuggestion =
                         intent.getParcelableExtra(WifiManager.EXTRA_NETWORK_SUGGESTION);
                 mEventFacade.postEvent(
@@ -424,6 +482,7 @@ public class WifiManagerFacade extends RpcReceiver {
             if (j.has("security")) {
                 if (TextUtils.equals(j.getString("security"), "SAE")) {
                     config.allowedKeyManagement.set(KeyMgmt.SAE);
+                    config.requirePMF = true;
                 } else {
                     config.allowedKeyManagement.set(KeyMgmt.WPA_PSK);
                 }
@@ -435,7 +494,16 @@ public class WifiManagerFacade extends RpcReceiver {
             config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WPA_PSK);
             config.preSharedKey = j.getString("preSharedKey");
         } else {
-            config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
+            if (j.has("security")) {
+                if (TextUtils.equals(j.getString("security"), "OWE")) {
+                    config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.OWE);
+                    config.requirePMF = true;
+                } else {
+                    config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
+                }
+            } else {
+                config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
+            }
         }
         if (j.has("BSSID")) {
             config.BSSID = j.getString("BSSID");
@@ -537,6 +605,14 @@ public class WifiManagerFacade extends RpcReceiver {
         WifiConfiguration config = new WifiConfiguration();
         config.allowedKeyManagement.set(KeyMgmt.WPA_EAP);
         config.allowedKeyManagement.set(KeyMgmt.IEEE8021X);
+
+        if (j.has("security")) {
+            if (TextUtils.equals(j.getString("security"), "SUITE_B_192")) {
+                config.allowedKeyManagement.set(KeyMgmt.SUITE_B_192);
+                config.requirePMF = true;
+            }
+        }
+
         if (j.has("SSID")) {
             config.SSID = "\"" + j.getString("SSID") + "\"";
         } else if (j.has("ssid")) {
@@ -580,11 +656,11 @@ public class WifiManagerFacade extends RpcReceiver {
                     MacAddress.fromString(j.getJSONArray("bssidPattern").getString(0)),
                     MacAddress.fromString(j.getJSONArray("bssidPattern").getString(1)));
         }
-        if (j.has("hiddenSSID") && j.getBoolean("hiddenSSID")) {
-            builder = builder.setIsHiddenSsid();
+        if (j.has("hiddenSSID")) {
+            builder = builder.setIsHiddenSsid(j.getBoolean("hiddenSSID"));
         }
-        if (j.has("isEnhancedOpen") && j.getBoolean("isEnhancedOpen")) {
-            builder = builder.setIsEnhancedOpen();
+        if (j.has("isEnhancedOpen")) {
+            builder = builder.setIsEnhancedOpen(j.getBoolean("isEnhancedOpen"));
         }
         boolean isWpa3 = false;
         if (j.has("isWpa3") && j.getBoolean("isWpa3")) {
@@ -619,11 +695,11 @@ public class WifiManagerFacade extends RpcReceiver {
         if (j.has("BSSID")) {
             builder = builder.setBssid(MacAddress.fromString(j.getString("BSSID")));
         }
-        if (j.has("hiddenSSID") && j.getBoolean("hiddenSSID")) {
-            builder = builder.setIsHiddenSsid();
+        if (j.has("hiddenSSID")) {
+            builder = builder.setIsHiddenSsid(j.getBoolean("hiddenSSID"));
         }
-        if (j.has("isEnhancedOpen") && j.getBoolean("isEnhancedOpen")) {
-            builder = builder.setIsEnhancedOpen();
+        if (j.has("isEnhancedOpen")) {
+            builder = builder.setIsEnhancedOpen(j.getBoolean("isEnhancedOpen"));
         }
         boolean isWpa3 = false;
         if (j.has("isWpa3") && j.getBoolean("isWpa3")) {
@@ -643,14 +719,15 @@ public class WifiManagerFacade extends RpcReceiver {
                 builder = builder.setWpa3EnterpriseConfig(genWifiEnterpriseConfig(j));
             }
         }
-        if (j.has("isAppInteractionRequired") && j.getBoolean("isAppInteractionRequired")) {
-            builder = builder.setIsAppInteractionRequired();
+        if (j.has("isAppInteractionRequired")) {
+            builder = builder.setIsAppInteractionRequired(j.getBoolean("isAppInteractionRequired"));
         }
-        if (j.has("isUserInteractionRequired") && j.getBoolean("isUserInteractionRequired")) {
-            builder = builder.setIsUserInteractionRequired();
+        if (j.has("isUserInteractionRequired")) {
+            builder = builder.setIsUserInteractionRequired(
+                    j.getBoolean("isUserInteractionRequired"));
         }
-        if (j.has("isMetered") && j.getBoolean("isMetered")) {
-            builder = builder.setIsMetered();
+        if (j.has("isMetered")) {
+            builder = builder.setIsMetered(j.getBoolean("isMetered"));
         }
         if (j.has("priority")) {
             builder = builder.setPriority(j.getInt("priority"));
@@ -988,7 +1065,8 @@ public class WifiManagerFacade extends RpcReceiver {
     public void startSubscriptionProvisioning(
             @RpcParameter(name = "configJson") JSONObject configJson) {
         ProvisioningCallback callback = new ProvisioningCallbackFacade(mEventFacade);
-        mWifi.startSubscriptionProvisioning(buildTestOsuProvider(configJson), callback, null);
+        mWifi.startSubscriptionProvisioning(buildTestOsuProvider(configJson),
+                mService.getMainExecutor(), callback);
     }
 
     /**
@@ -1210,8 +1288,8 @@ public class WifiManagerFacade extends RpcReceiver {
      * @return true if this device supports Wi-Fi Enhanced Open (OWE)
      */
     @Rpc(description = "Check if Enhanced Open (OWE) is supported on this device.")
-    public Boolean wifiIsOweSupported() {
-        return mWifi.isOweSupported();
+    public Boolean wifiIsEnhancedOpenSupported() {
+        return mWifi.isEnhancedOpenSupported();
     }
     /**
      * @return true if this device supports Wi-Fi Device Provisioning Protocol (Easy-connect)
@@ -1281,6 +1359,36 @@ public class WifiManagerFacade extends RpcReceiver {
         return mWifi.setWifiApConfiguration(config);
     }
 
+    /**
+     * Register softap callback.
+     *
+     * @return the id associated with the {@link SoftApCallbackImp}
+     * used for registering callback.
+     */
+    @Rpc(description = "Register softap callback function.",
+            returns = "Id of the callback associated with registering.")
+    public Integer registerSoftApCallback() {
+        SoftApCallbackImp softApCallback = new SoftApCallbackImp(mEventFacade);
+        mSoftapCallbacks.put(softApCallback.mId, softApCallback);
+        mWifi.registerSoftApCallback(softApCallback,
+                new Handler(mCallbackHandlerThread.getLooper()));
+        return softApCallback.mId;
+    }
+
+    /**
+     * Unregister softap callback role for the {@link SoftApCallbackImp} identified by the given
+     * {@code callbackId}.
+     *
+     * @param callbackId the id associated with the {@link SoftApCallbackImp}
+     * used for registering callback.
+     *
+     */
+    @Rpc(description = "Unregister softap callback function.")
+    public void unregisterSoftApCallback(@RpcParameter(name = "callbackId") Integer callbackId) {
+        mWifi.unregisterSoftApCallback(mSoftapCallbacks.get(callbackId));
+        mSoftapCallbacks.delete(callbackId);
+    }
+
     @Rpc(description = "Set the country code used by WiFi.")
     public void wifiSetCountryCode(
             @RpcParameter(name = "country") String country) {
@@ -1335,6 +1443,21 @@ public class WifiManagerFacade extends RpcReceiver {
         if (mTrackingTetherStateChange == true) {
             mService.unregisterReceiver(mTetherStateReceiver);
             mTrackingTetherStateChange = false;
+        }
+    }
+
+    @Rpc(description = "Start listening for network suggestion change related broadcasts.")
+    public void wifiStartTrackingNetworkSuggestionStateChange() {
+        mService.registerReceiver(
+                mNetworkSuggestionStateChangeReceiver, mNetworkSuggestionStateChangeFilter);
+        mTrackingNetworkSuggestionStateChange = true;
+    }
+
+    @Rpc(description = "Stop listening for network suggestion change related broadcasts.")
+    public void wifiStopTrackingNetworkSuggestionStateChange() {
+        if (mTrackingNetworkSuggestionStateChange) {
+            mService.unregisterReceiver(mNetworkSuggestionStateChangeReceiver);
+            mTrackingNetworkSuggestionStateChange = false;
         }
     }
 
