@@ -42,7 +42,10 @@ import android.net.RouteInfo;
 import android.net.Uri;
 import android.net.wifi.RttManager.RttCapabilities;
 import android.net.wifi.ScanResult;
+import android.net.wifi.SoftApCapability;
+import android.net.wifi.SoftApConfiguration;
 import android.net.wifi.SoftApInfo;
+import android.net.wifi.WifiClient;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiEnterpriseConfig;
 import android.net.wifi.WifiInfo;
@@ -280,8 +283,14 @@ public class JsonBuilder {
         if (data instanceof WifiActivityEnergyInfo) {
             return buildWifiActivityEnergyInfo((WifiActivityEnergyInfo) data);
         }
+        if (data instanceof SoftApConfiguration) {
+            return buildSoftApConfiguration((SoftApConfiguration) data);
+        }
         if (data instanceof WifiConfiguration) {
             return buildWifiConfiguration((WifiConfiguration) data);
+        }
+        if (data instanceof WifiClient) {
+            return buildWifiClient((WifiClient) data);
         }
         if (data instanceof WifiP2pConfig) {
             return buildWifiP2pConfig((WifiP2pConfig) data);
@@ -294,6 +303,9 @@ public class JsonBuilder {
         }
         if (data instanceof WifiP2pGroup) {
             return buildWifiP2pGroup((WifiP2pGroup) data);
+        }
+        if (data instanceof SoftApCapability) {
+            return buildSoftApCapability((SoftApCapability) data);
         }
         if (data instanceof SoftApInfo) {
             return buildSoftApInfo((SoftApInfo) data);
@@ -1042,6 +1054,42 @@ public class JsonBuilder {
         return result;
     }
 
+    private static Object buildSoftApConfiguration(SoftApConfiguration data)
+            throws JSONException {
+        JSONObject config = new JSONObject();
+        config.put("SSID", data.getSsid());
+        config.put("BSSID", data.getBssid());
+        config.put("hiddenSSID", data.isHiddenSsid());
+        int securityType = data.getSecurityType();
+        if (securityType == SoftApConfiguration.SECURITY_TYPE_OPEN) {
+            config.put("security", "NONE");
+        } else if (securityType == SoftApConfiguration.SECURITY_TYPE_WPA2_PSK) {
+            config.put("security", "WPA2_PSK");
+        } else if (securityType == SoftApConfiguration.SECURITY_TYPE_WPA3_SAE_TRANSITION) {
+            config.put("security", "WPA3_SAE_TRANSITION");
+        } else if (securityType == SoftApConfiguration.SECURITY_TYPE_WPA3_SAE) {
+            config.put("security", "WPA3_SAE");
+        }
+        if (data.getPassphrase() != null) {
+            config.put("password", data.getPassphrase());
+        }
+        config.put("apBand", data.getBand());
+        config.put("apChannel", data.getChannel());
+        config.put("MaxNumberOfClients", data.getMaxNumberOfClients());
+        config.put("ShutdownTimeoutMillis", data.getShutdownTimeoutMillis());
+        config.put("AutoShutdownEnabled", data.isAutoShutdownEnabled());
+        config.put("ClientControlByUserEnabled", data.isClientControlByUserEnabled());
+        config.put("AllowedClientList", build(data.getAllowedClientList()));
+        config.put("BlockedClientList", build(data.getBlockedClientList()));
+        return config;
+    }
+
+    private static Object buildWifiClient(WifiClient data) throws JSONException {
+        JSONObject config = new JSONObject();
+        config.put("MacAddress", data.getMacAddress().toString());
+        return config;
+    }
+
     private static Object buildWifiConfiguration(WifiConfiguration data)
             throws JSONException {
         JSONObject config = new JSONObject();
@@ -1156,6 +1204,20 @@ public class JsonBuilder {
         info.put("groupFormed", data.groupFormed);
         info.put("isGroupOwner", data.isGroupOwner);
         info.put("groupOwnerAddress", data.groupOwnerAddress);
+        return info;
+    }
+
+    private static JSONObject buildSoftApCapability(SoftApCapability data)
+            throws JSONException {
+        JSONObject info = new JSONObject();
+        Log.d("build softAp capability info.");
+        info.put("maxSupportedClients", data.getMaxSupportedClients());
+        info.put("acsOffloadSupported", data.areFeaturesSupported(
+                SoftApCapability.SOFTAP_FEATURE_ACS_OFFLOAD));
+        info.put("clientForceDisconnectSupported", data.areFeaturesSupported(
+                SoftApCapability.SOFTAP_FEATURE_CLIENT_FORCE_DISCONNECT));
+        info.put("wpa3SaeSupported", data.areFeaturesSupported(
+                SoftApCapability.SOFTAP_FEATURE_WPA3_SAE));
         return info;
     }
 

@@ -22,7 +22,6 @@ import static com.googlecode.android_scripting.jsonrpc.JsonBuilder.build;
 
 import android.app.Service;
 import android.content.BroadcastReceiver;
-import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -38,6 +37,8 @@ import android.net.NetworkSpecifier;
 import android.net.Uri;
 import android.net.wifi.EasyConnectStatusCallback;
 import android.net.wifi.ScanResult;
+import android.net.wifi.SoftApCapability;
+import android.net.wifi.SoftApConfiguration;
 import android.net.wifi.SoftApInfo;
 import android.net.wifi.WifiClient;
 import android.net.wifi.WifiConfiguration;
@@ -62,7 +63,6 @@ import android.os.HandlerExecutor;
 import android.os.HandlerThread;
 import android.os.PatternMatcher;
 import android.os.connectivity.WifiActivityEnergyInfo;
-import android.provider.Settings.Global;
 import android.provider.Settings.SettingNotFoundException;
 import android.text.TextUtils;
 import android.util.Base64;
@@ -255,11 +255,25 @@ public class WifiManagerFacade extends RpcReceiver {
             Bundle msg = new Bundle();
             msg.putInt("NumClients", clients.size());
             mEventFacade.postEvent(mEventStr + "OnNumClientsChanged", msg);
+            mEventFacade.postEvent(mEventStr + "OnConnectedClientsChanged", clients);
         }
 
         @Override
         public void onInfoChanged(SoftApInfo softApInfo) {
             mEventFacade.postEvent(mEventStr + "OnInfoChanged", softApInfo);
+        }
+
+        @Override
+        public void onCapabilityChanged(SoftApCapability softApCapability) {
+            mEventFacade.postEvent(mEventStr + "OnCapabilityChanged", softApCapability);
+        }
+
+        @Override
+        public void onBlockedClientConnecting(WifiClient client, int blockedReason) {
+            Bundle msg = new Bundle();
+            msg.putString("WifiClient", client.getMacAddress().toString());
+            msg.putInt("BlockedReason", blockedReason);
+            mEventFacade.postEvent(mEventStr + "OnBlockedClientConnecting", msg);
         }
 
         @Override
@@ -1169,17 +1183,42 @@ public class WifiManagerFacade extends RpcReceiver {
     }
 
     /**
-     * Disable ephemeral network.
+     * User disconnect network.
      *
      * @param ssid SSID of wifi network
      */
-    @Rpc(description = "Forget a wifi network by networkId")
-    public void wifiDisableEphemeralNetwork(@RpcParameter(name = "ssid") String ssid) {
+    @Rpc(description = "Disconnect a wifi network by SSID")
+    public void wifiUserDisconnectNetwork(@RpcParameter(name = "ssid") String ssid) {
         mWifi.disableEphemeralNetwork("\"" + ssid + "\"");
+        mWifi.disconnect();
     }
 
+    /**
+     * User disconnect passpoint network.
+     *
+     * @param fqdn FQDN of the passpoint network
+     */
+    @Rpc(description = "Disconnect a wifi network by FQDN")
+    public void wifiUserDisconnectPasspointNetwork(@RpcParameter(name = "fqdn") String fqdn) {
+        mWifi.disableEphemeralNetwork(fqdn);
+        mWifi.disconnect();
+    }
+
+    /**
+     * Get SoftAp Configuration with SoftApConfiguration.
+     */
     @Rpc(description = "Gets the Wi-Fi AP Configuration.")
-    public WifiConfiguration wifiGetApConfiguration() {
+    public SoftApConfiguration wifiGetApConfiguration() {
+        return mWifi.getSoftApConfiguration();
+    }
+
+    /**
+     * Get SoftAp Configuration with WifiConfiguration.
+     *
+     * Used to test deprecated API to check backward compatible
+     */
+    @Rpc(description = "Gets the Wi-Fi AP Configuration with WifiConfiguration.")
+    public WifiConfiguration wifiGetApConfigurationWithWifiConfiguration() {
         return mWifi.getWifiApConfiguration();
     }
 
@@ -1414,6 +1453,83 @@ public class WifiManagerFacade extends RpcReceiver {
         return mWifi.removeNetwork(netId);
     }
 
+    private SoftApConfiguration createSoftApConfiguration(JSONObject configJson)
+            throws JSONException {
+        if (configJson == null) {
+            return null;
+        }
+        SoftApConfiguration.Builder configBuilder = new SoftApConfiguration.Builder();
+        if (configJson.has("SSID")) {
+            configBuilder.setSsid(configJson.getString("SSID"));
+        }
+        if (configJson.has("password")) {
+            String pwd = configJson.getString("password");
+            // Check if new security type SAE (WPA3) is present. Default to PSK
+            if (configJson.has("security")) {
+                String securityType = configJson.getString("security");
+                if (TextUtils.equals(securityType, "WPA2_PSK")) {
+                    configBuilder.setPassphrase(pwd, SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);
+                } else if (TextUtils.equals(securityType, "WPA3_SAE_TRANSITION")) {
+                    configBuilder.setPassphrase(pwd,
+                            SoftApConfiguration.SECURITY_TYPE_WPA3_SAE_TRANSITION);
+                } else if (TextUtils.equals(securityType, "WPA3_SAE")) {
+                    configBuilder.setPassphrase(pwd, SoftApConfiguration.SECURITY_TYPE_WPA3_SAE);
+                }
+            } else {
+                configBuilder.setPassphrase(pwd, SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);
+            }
+        }
+        if (configJson.has("BSSID")) {
+            configBuilder.setBssid(MacAddress.fromString(configJson.getString("BSSID")));
+        }
+        if (configJson.has("hiddenSSID")) {
+            configBuilder.setHiddenSsid(configJson.getBoolean("hiddenSSID"));
+        }
+        if (configJson.has("apBand")) {
+            configBuilder.setBand(configJson.getInt("apBand"));
+        }
+        if (configJson.has("apChannel") && configJson.has("apBand")) {
+            configBuilder.setChannel(configJson.getInt("apChannel"), configJson.getInt("apBand"));
+        }
+
+        if (configJson.has("MaxNumberOfClients")) {
+            configBuilder.setMaxNumberOfClients(configJson.getInt("MaxNumberOfClients"));
+        }
+
+        if (configJson.has("ShutdownTimeoutMillis")) {
+            configBuilder.setShutdownTimeoutMillis(configJson.getLong("ShutdownTimeoutMillis"));
+        }
+
+        if (configJson.has("AutoShutdownEnabled")) {
+            configBuilder.setAutoShutdownEnabled(configJson.getBoolean("AutoShutdownEnabled"));
+        }
+
+        if (configJson.has("ClientControlByUserEnabled")) {
+            configBuilder.setClientControlByUserEnabled(
+                    configJson.getBoolean("ClientControlByUserEnabled"));
+        }
+
+        List allowedClientList = new ArrayList<>();
+        if (configJson.has("AllowedClientList")) {
+            JSONArray allowedList = configJson.getJSONArray("AllowedClientList");
+            for (int i = 0; i < allowedList.length(); i++) {
+                allowedClientList.add(MacAddress.fromString(allowedList.getString(i)));
+            }
+        }
+
+        List blockedClientList = new ArrayList<>();
+        if (configJson.has("BlockedClientList")) {
+            JSONArray blockedList = configJson.getJSONArray("BlockedClientList");
+            for (int j = 0; j < blockedList.length(); j++) {
+                blockedClientList.add(MacAddress.fromString(blockedList.getString(j)));
+            }
+
+        }
+        configBuilder.setAllowedClientList(allowedClientList);
+        configBuilder.setBlockedClientList(blockedClientList);
+        return configBuilder.build();
+    }
+
     private WifiConfiguration createSoftApWifiConfiguration(JSONObject configJson)
             throws JSONException {
         WifiConfiguration config = genWifiConfig(configJson);
@@ -1434,11 +1550,24 @@ public class WifiManagerFacade extends RpcReceiver {
         return config;
     }
 
+    /**
+     * Set SoftAp Configuration with SoftApConfiguration.
+     */
     @Rpc(description = "Set configuration for soft AP.")
     public Boolean wifiSetWifiApConfiguration(
             @RpcParameter(name = "configJson") JSONObject configJson) throws JSONException {
-        WifiConfiguration config = createSoftApWifiConfiguration(configJson);
-        return mWifi.setWifiApConfiguration(config);
+        return mWifi.setSoftApConfiguration(createSoftApConfiguration(configJson));
+    }
+
+    /**
+     * Set SoftAp Configuration with WifiConfiguration.
+     *
+     * Used to test deprecated API to check backward compatible.
+     */
+    @Rpc(description = "Set configuration for soft AP with WifiConfig.")
+    public Boolean wifiSetWifiApConfigurationWithWifiConfiguration(
+            @RpcParameter(name = "configJson") JSONObject configJson) throws JSONException {
+        return mWifi.setWifiApConfiguration(createSoftApWifiConfiguration(configJson));
     }
 
     /**
@@ -1558,19 +1687,9 @@ public class WifiManagerFacade extends RpcReceiver {
     public Boolean wifiToggleScanAlwaysAvailable(
             @RpcParameter(name = "enabled") @RpcOptional Boolean enabled)
                     throws SettingNotFoundException {
-        ContentResolver cr = mService.getContentResolver();
-        int isSet = 0;
-        if (enabled == null) {
-            isSet = Global.getInt(cr, Global.WIFI_SCAN_ALWAYS_AVAILABLE);
-            isSet ^= 1;
-        } else if (enabled == true) {
-            isSet = 1;
-        }
-        Global.putInt(cr, Global.WIFI_SCAN_ALWAYS_AVAILABLE, isSet);
-        if (isSet == 1) {
-            return true;
-        }
-        return false;
+        boolean isSet = (enabled == null) ? !mWifi.isScanAlwaysAvailable() : enabled;
+        mWifi.setScanAlwaysAvailable(isSet);
+        return isSet;
     }
 
     @Rpc(description = "Enable/disable WifiConnectivityManager.")
