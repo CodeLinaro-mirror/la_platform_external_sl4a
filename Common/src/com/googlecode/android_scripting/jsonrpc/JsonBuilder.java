@@ -772,6 +772,7 @@ public class JsonBuilder {
         }
         result.put("supplicant_state", build(supplicantState));
         result.put("is_5ghz", data.is5GHz());
+        result.put("is_6ghz", data.is6GHz());
         result.put("is_24ghz", data.is24GHz());
         return result;
     }
@@ -1154,6 +1155,7 @@ public class JsonBuilder {
         String privateKeyString = Base64.encodeToString(pk.getEncoded(), Base64.DEFAULT);
         config.put(WifiEnterpriseConfig.PRIVATE_KEY_ID_KEY, privateKeyString);
         config.put(WifiEnterpriseConfig.PASSWORD_KEY, data.getPassword());
+        config.put(WifiEnterpriseConfig.OCSP, data.getOcsp());
         return config;
     }
 
