@@ -519,28 +519,26 @@ public class WifiManagerFacade extends RpcReceiver {
             // Check if new security type SAE (WPA3) is present. Default to PSK
             if (j.has("security")) {
                 if (TextUtils.equals(j.getString("security"), "SAE")) {
-                    config.allowedKeyManagement.set(KeyMgmt.SAE);
-                    config.requirePmf = true;
+                    config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_SAE);
                 } else {
-                    config.allowedKeyManagement.set(KeyMgmt.WPA_PSK);
+                    config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_PSK);
                 }
             } else {
-                config.allowedKeyManagement.set(KeyMgmt.WPA_PSK);
+                config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_PSK);
             }
             config.preSharedKey = "\"" + j.getString("password") + "\"";
         } else if (j.has("preSharedKey")) {
-            config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WPA_PSK);
+            config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_PSK);
             config.preSharedKey = j.getString("preSharedKey");
         } else {
             if (j.has("security")) {
                 if (TextUtils.equals(j.getString("security"), "OWE")) {
-                    config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.OWE);
-                    config.requirePmf = true;
+                    config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_OWE);
                 } else {
-                    config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
+                    config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_OPEN);
                 }
             } else {
-                config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
+                config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_OPEN);
             }
         }
         if (j.has("BSSID")) {
@@ -557,9 +555,7 @@ public class WifiManagerFacade extends RpcReceiver {
         }
         if (j.has("wepKeys")) {
             // Looks like we only support static WEP.
-            config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
-            config.allowedAuthAlgorithms.set(AuthAlgorithm.OPEN);
-            config.allowedAuthAlgorithms.set(AuthAlgorithm.SHARED);
+            config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_WEP);
             JSONArray keys = j.getJSONArray("wepKeys");
             String[] wepKeys = new String[keys.length()];
             for (int i = 0; i < keys.length(); i++) {
@@ -605,7 +601,11 @@ public class WifiManagerFacade extends RpcReceiver {
             Log.v("Client Cert String is " + certStr);
             Log.v("Client Key String is " + keyStr);
             X509Certificate cert = strToX509Cert(certStr);
-            PrivateKey privKey = strToPrivateKey(keyStr);
+            String certAlgo = "RSA";
+            if (j.has("cert_algo")) {
+                certAlgo = j.getString("cert_algo");
+            }
+            PrivateKey privKey = strToPrivateKey(keyStr, certAlgo);
             Log.v("Cert is " + cert);
             Log.v("Private Key is " + privKey);
             eConfig.setClientKeyEntry(privKey, cert);
@@ -649,13 +649,11 @@ public class WifiManagerFacade extends RpcReceiver {
             return null;
         }
         WifiConfiguration config = new WifiConfiguration();
-        config.allowedKeyManagement.set(KeyMgmt.WPA_EAP);
-        config.allowedKeyManagement.set(KeyMgmt.IEEE8021X);
+        config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_EAP);
 
         if (j.has("security")) {
             if (TextUtils.equals(j.getString("security"), "SUITE_B_192")) {
-                config.allowedKeyManagement.set(KeyMgmt.SUITE_B_192);
-                config.requirePmf = true;
+                config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_EAP_SUITE_B);
             }
         }
 
@@ -848,11 +846,11 @@ public class WifiManagerFacade extends RpcReceiver {
         return (X509Certificate) cf.generateCertificate(certStream);
     }
 
-    private PrivateKey strToPrivateKey(String key) throws NoSuchAlgorithmException,
+    private PrivateKey strToPrivateKey(String key, String algo) throws NoSuchAlgorithmException,
             InvalidKeySpecException {
         byte[] keyBytes = base64StrToBytes(key);
         PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(keyBytes);
-        KeyFactory fact = KeyFactory.getInstance("RSA");
+        KeyFactory fact = KeyFactory.getInstance(algo);
         PrivateKey priv = fact.generatePrivate(keySpec);
         return priv;
     }
