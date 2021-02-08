@@ -16,6 +16,8 @@
 
 package com.googlecode.android_scripting.facade;
 
+import static android.net.NetworkCapabilities.TRANSPORT_WIFI;
+
 import android.app.Service;
 import android.app.usage.NetworkStats;
 import android.app.usage.NetworkStats.Bucket;
@@ -36,6 +38,7 @@ import android.net.ProxyInfo;
 import android.net.RouteInfo;
 import android.net.StringNetworkSpecifier;
 import android.net.Uri;
+import android.net.wifi.WifiNetworkSpecifier;
 import android.os.Bundle;
 import android.os.RemoteException;
 import android.provider.Settings;
@@ -44,6 +47,7 @@ import com.google.common.io.ByteStreams;
 import com.googlecode.android_scripting.FileUtils;
 import com.googlecode.android_scripting.Log;
 import com.googlecode.android_scripting.facade.wifi.WifiAwareManagerFacade;
+import com.googlecode.android_scripting.facade.wifi.WifiManagerFacade;
 import com.googlecode.android_scripting.jsonrpc.RpcReceiver;
 import com.googlecode.android_scripting.rpc.Rpc;
 import com.googlecode.android_scripting.rpc.RpcOptional;
@@ -66,6 +70,7 @@ import java.net.NetworkInterface;
 import java.net.SocketException;
 import java.net.URL;
 import java.net.URLConnection;
+import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
@@ -455,16 +460,19 @@ public class ConnectivityManagerFacade extends RpcReceiver {
             Log.d("build ClearCapabilities");
             builder.clearCapabilities();
         }
-        if (configJson.has("TransportType")) {
-            Log.d("build TransportType" + configJson.getInt("TransportType"));
-            builder.addTransportType(configJson.getInt("TransportType"));
+        if (configJson.has(ConnectivityConstants.NET_CAPABILITIES_TRANSPORT_TYPE)) {
+            Log.d("build TransportType"
+                    + configJson.getInt(ConnectivityConstants.NET_CAPABILITIES_TRANSPORT_TYPE));
+            builder.addTransportType(
+                    configJson.getInt(ConnectivityConstants.NET_CAPABILITIES_TRANSPORT_TYPE));
         }
         if (configJson.has("SignalStrength")) {
             Log.d("build SignalStrength" + configJson.getInt("SignalStrength"));
             builder.setSignalStrength(configJson.getInt("SignalStrength"));
         }
-        if (configJson.has("Capability")) {
-            JSONArray capabilities = configJson.getJSONArray("Capability");
+        if (configJson.has(ConnectivityConstants.NET_CAPABILITIES_CAPABILITIES)) {
+            JSONArray capabilities =
+                    configJson.getJSONArray(ConnectivityConstants.NET_CAPABILITIES_CAPABILITIES);
             for (int i = 0; i < capabilities.length(); i++) {
                 Log.d("build Capability" + capabilities.getInt(i));
                 builder.addCapability(capabilities.getInt(i));
@@ -555,6 +563,34 @@ public class ConnectivityManagerFacade extends RpcReceiver {
         return key;
     }
 
+    /**
+     * Initiates a network request {@link NetworkRequest} using {@link WifiNetworkSpecifier}.
+     *
+     * @param wNs JSONObject Dictionary of wifi network specifier parameters
+     * @param timeoutInMs Timeout for the request. 0 indicates no timeout.
+     * @throws JSONException
+     * @throws GeneralSecurityException
+     */
+    @Rpc(description = "Initiates a network request using the provided network specifier")
+    public String connectivityRequestWifiNetwork(
+            @RpcParameter(name = "wifiNetworkSpecifier") JSONObject wNs,
+            @RpcParameter(name = "timeoutInMS") Integer timeoutInMs)
+            throws JSONException, GeneralSecurityException {
+        NetworkRequest networkRequest = new NetworkRequest.Builder()
+                .addTransportType(TRANSPORT_WIFI)
+                .setNetworkSpecifier(WifiManagerFacade.genWifiNetworkSpecifier(wNs))
+                .build();
+        mNetworkCallback = new NetworkCallback(NetworkCallback.EVENT_ALL);
+        if (timeoutInMs != 0) {
+            mManager.requestNetwork(networkRequest, mNetworkCallback, timeoutInMs);
+        } else {
+            mManager.requestNetwork(networkRequest, mNetworkCallback);
+        }
+        String key = mNetworkCallback.mId;
+        mNetworkCallbackMap.put(key, mNetworkCallback);
+        return key;
+    }
+
     @Rpc(description = "Stop listening for connectivity changes")
     public void connectivityStopTrackingConnectivityStateChange() {
         if (mTrackingConnectivityStateChange) {
@@ -596,6 +632,16 @@ public class ConnectivityManagerFacade extends RpcReceiver {
     @Rpc(description = "Get connection status information about all network types supported by the device.")
     public NetworkInfo[] connectivityNetworkGetAllInfo() {
         return mManager.getAllNetworkInfo();
+    }
+
+    @Rpc(description = "Get connection status information about all network types supported by the device.")
+    public NetworkCapabilities[] connectivityNetworkGetAllCapabilities() {
+        Network[] networks = mManager.getAllNetworks();
+        NetworkCapabilities[] networkCapabilties = new NetworkCapabilities[networks.length];
+        for (int i = 0; i < networks.length; i++) {
+            networkCapabilties[i] = mManager.getNetworkCapabilities(networks[i]);
+        }
+        return networkCapabilties;
     }
 
     @Rpc(description = "Check whether the active network is connected to the Internet.")
