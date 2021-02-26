@@ -16,12 +16,14 @@
 
 package com.googlecode.android_scripting.facade.wifi;
 
+import static android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET;
 import static android.net.NetworkCapabilities.TRANSPORT_WIFI;
 import static android.net.wifi.WifiScanner.WIFI_BAND_24_GHZ;
 import static android.net.wifi.WifiScanner.WIFI_BAND_5_GHZ;
 
 import static com.googlecode.android_scripting.jsonrpc.JsonBuilder.build;
 
+import android.annotation.NonNull;
 import android.app.Service;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -32,6 +34,7 @@ import android.net.ConnectivityManager.NetworkCallback;
 import android.net.DhcpInfo;
 import android.net.MacAddress;
 import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
 import android.net.NetworkInfo.DetailedState;
 import android.net.NetworkRequest;
@@ -52,6 +55,7 @@ import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiManager.NetworkRequestMatchCallback;
 import android.net.wifi.WifiManager.NetworkRequestUserSelectionCallback;
+import android.net.wifi.WifiManager.SubsystemRestartTrackingCallback;
 import android.net.wifi.WifiManager.WifiLock;
 import android.net.wifi.WifiNetworkSpecifier;
 import android.net.wifi.WifiNetworkSuggestion;
@@ -138,6 +142,7 @@ public class WifiManagerFacade extends RpcReceiver {
     private final WifiScanResultsReceiver mWifiScanResultsReceiver;
     private final WifiStateChangeReceiver mStateChangeReceiver;
     private final WifiNetworkSuggestionStateChangeReceiver mNetworkSuggestionStateChangeReceiver;
+    private SubsystemRestartTrackingCallbackFacade mSubsystemRestartTrackingCallback = null;
     private final HandlerThread mCallbackHandlerThread;
     private final Object mCallbackLock = new Object();
     private final Map<NetworkSpecifier, NetworkCallback> mNetworkCallbacks = new HashMap<>();
@@ -215,10 +220,11 @@ public class WifiManagerFacade extends RpcReceiver {
 
     private final class NetworkCallbackImpl extends NetworkCallback {
         private static final String EVENT_TAG = mEventType + "NetworkCallback";
+        private boolean mOnAvailableCalled = false;
 
         @Override
         public void onAvailable(Network network) {
-            mEventFacade.postEvent(EVENT_TAG + "OnAvailable", mWifi.getConnectionInfo());
+            mOnAvailableCalled = true;
         }
 
         @Override
@@ -229,6 +235,20 @@ public class WifiManagerFacade extends RpcReceiver {
         @Override
         public void onLost(Network network) {
             mEventFacade.postEvent(EVENT_TAG + "OnLost", null);
+        }
+
+        @Override
+        public void onCapabilitiesChanged(@NonNull Network network,
+                @NonNull NetworkCapabilities networkCapabilities) {
+            if (mOnAvailableCalled) {
+                // send the onAvailable event with WifiInfo details fetched from the first
+                // onCapabilitiesChanged callback after onAvailable callback invocation.
+                mEventFacade.postEvent(EVENT_TAG + "OnAvailable",
+                        networkCapabilities.getTransportInfo());
+                mOnAvailableCalled = false;
+            }
+            mEventFacade.postEvent(EVENT_TAG + "OnCapabilitiesChanged",
+                    networkCapabilities.getTransportInfo());
         }
     };
 
@@ -400,6 +420,20 @@ public class WifiManagerFacade extends RpcReceiver {
     public class WifiStateChangeReceiver extends BroadcastReceiver {
         String mCachedWifiInfo = "";
 
+        // When a peer to peer request is active, WifiManager.getConnectionInfo() returns
+        // the peer to peer connection details. Hence use networking API's to retrieve the
+        // internet connection details.
+        private WifiInfo getInternetConnectivityWifiInfo() {
+            for (Network network : mCm.getAllNetworks())  {
+                NetworkCapabilities netCap = mCm.getNetworkCapabilities(network);
+                if (netCap.hasTransport(TRANSPORT_WIFI)
+                        && netCap.hasCapability(NET_CAPABILITY_INTERNET)) {
+                    return (WifiInfo) netCap.getTransportInfo();
+                }
+            }
+            return null;
+        }
+
         @Override
         public void onReceive(Context context, Intent intent) {
             String action = intent.getAction();
@@ -410,7 +444,12 @@ public class WifiManagerFacade extends RpcReceiver {
                 // If network info is of type wifi, send wifi events.
                 if (nInfo.getType() == ConnectivityManager.TYPE_WIFI) {
                     if (nInfo.getDetailedState().equals(DetailedState.CONNECTED)) {
-                        WifiInfo wInfo = mWifi.getConnectionInfo();
+                        WifiInfo wInfo = getInternetConnectivityWifiInfo();
+                        if (wInfo == null) {
+                            Log.e("Failed to get WifiInfo for internet connection. "
+                                    + "Not sending wifi network connection event");
+                            return;
+                        }
                         String bssid = wInfo.getBSSID();
                         if (bssid != null && !mCachedWifiInfo.equals(wInfo.toString())) {
                             Log.d("WifiNetworkConnected");
@@ -1090,6 +1129,27 @@ public class WifiManagerFacade extends RpcReceiver {
         }
     }
 
+    private class SubsystemRestartTrackingCallbackFacade extends SubsystemRestartTrackingCallback {
+        private final EventFacade mEventFacade;
+
+        SubsystemRestartTrackingCallbackFacade(EventFacade eventFacade) {
+            super();
+            mEventFacade = eventFacade;
+        }
+
+        @Override
+        public void onSubsystemRestarting() {
+            Log.v("onSubsystemRestarting");
+            mEventFacade.postEvent("WifiSubsystemRestarting", null);
+        }
+
+        @Override
+        public void onSubsystemRestarted() {
+            Log.v("onSubsystemRestarted");
+            mEventFacade.postEvent("WifiSubsystemRestarted", null);
+        }
+    }
+
     private OsuProvider buildTestOsuProvider(JSONObject config) {
         String osuServiceDescription = "Google Passpoint Test Service";
         List<Integer> osuMethodList =
@@ -1711,6 +1771,11 @@ public class WifiManagerFacade extends RpcReceiver {
 
     @Rpc(description = "Restart the WiFi subsystem.")
     public void restartWifiSubsystem(@RpcParameter(name = "reason") String reason) {
+        if (mSubsystemRestartTrackingCallback == null) {
+            // one-time registration if needed
+            mSubsystemRestartTrackingCallback = new SubsystemRestartTrackingCallbackFacade(
+                    mEventFacade);
+        }
         mWifi.restartWifiSubsystem(reason);
     }
 
