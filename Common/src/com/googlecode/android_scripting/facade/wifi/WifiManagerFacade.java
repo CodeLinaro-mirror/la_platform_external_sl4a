@@ -23,18 +23,21 @@ import static android.net.wifi.WifiScanner.WIFI_BAND_5_GHZ;
 
 import static com.googlecode.android_scripting.jsonrpc.JsonBuilder.build;
 
+import android.annotation.NonNull;
 import android.app.Service;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.net.ConnectivityManager;
+import android.net.ConnectivityManager.NetworkCallback;
 import android.net.DhcpInfo;
 import android.net.MacAddress;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
 import android.net.NetworkInfo.DetailedState;
+import android.net.NetworkRequest;
 import android.net.NetworkSpecifier;
 import android.net.Uri;
 import android.net.wifi.CoexUnsafeChannel;
@@ -394,14 +397,39 @@ public class WifiManagerFacade extends RpcReceiver {
             if (!SdkLevel.isAtLeastS()) {
                 return mWifi.getConnectionInfo();
             }
-            for (Network network : mCm.getAllNetworks())  {
-                NetworkCapabilities netCap = mCm.getNetworkCapabilities(network);
-                if (netCap.hasTransport(TRANSPORT_WIFI)
-                        && netCap.hasCapability(NET_CAPABILITY_INTERNET)) {
-                    return (WifiInfo) netCap.getTransportInfo();
-                }
+            // TODO (b/156867433): We need a location sensitive synchronous API proposed
+            // in aosp/1629501.
+            final CountDownLatch waitForNetwork = new CountDownLatch(1);
+            final class AnswerBox {
+                public WifiInfo wifiInfo;
             }
-            return null;
+            final AnswerBox answerBox = new AnswerBox();
+            final NetworkCallback networkCallback =
+                    new NetworkCallback(NetworkCallback.FLAG_INCLUDE_LOCATION_INFO) {
+                @Override
+                public void onCapabilitiesChanged(@NonNull Network network,
+                        @NonNull NetworkCapabilities networkCapabilities) {
+                    answerBox.wifiInfo = (WifiInfo) networkCapabilities.getTransportInfo();
+                    waitForNetwork.countDown();
+                }
+            };
+            mCm.registerNetworkCallback(
+                    new NetworkRequest.Builder()
+                            .addTransportType(TRANSPORT_WIFI)
+                            .addCapability(NET_CAPABILITY_INTERNET)
+                            .build(), networkCallback);
+            try {
+                if (!waitForNetwork.await(5, TimeUnit.SECONDS)) {
+                    Log.e("Timed out waiting for network to connect");
+                    return null;
+                }
+                return answerBox.wifiInfo;
+            } catch (InterruptedException e) {
+                Log.e("Waiting for onAvailable failed", e);
+                return null;
+            } finally {
+                mCm.unregisterNetworkCallback(networkCallback);
+            }
         }
 
         @Override
@@ -1757,13 +1785,13 @@ public class WifiManagerFacade extends RpcReceiver {
     }
 
     @Rpc(description = "Restart the WiFi subsystem.")
-    public void restartWifiSubsystem(@RpcParameter(name = "reason") String reason) {
+    public void restartWifiSubsystem() {
         if (mSubsystemRestartTrackingCallback == null) {
             // one-time registration if needed
             mSubsystemRestartTrackingCallback = new SubsystemRestartTrackingCallbackFacade(
                     mEventFacade);
         }
-        mWifi.restartWifiSubsystem(reason);
+        mWifi.restartWifiSubsystem();
     }
 
     @Rpc(description = "Toggle Wifi scan always available on and off.", returns = "True if Wifi scan is always available.")
@@ -1972,15 +2000,11 @@ public class WifiManagerFacade extends RpcReceiver {
         }
 
         @Override
-        public void onBootstrapUriGenerated(String uri) {
+        public void onBootstrapUriGenerated(@NonNull Uri dppUri) {
             Bundle msg = new Bundle();
             msg.putString("Type", "onBootstrapUriGenerated");
-            if (uri != null) {
-                Log.d("onBootstrapUriGenerated uri: " + uri);
-                msg.putString("generatedUri", uri);
-            } else {
-                msg.putString("generatedUri", "");
-            }
+            Log.d("onBootstrapUriGenerated uri: " + dppUri.toString());
+            msg.putString("generatedUri", dppUri.toString());
             Log.d("Posting event: onBootstrapUriGenerated");
             mEventFacade.postEvent(EASY_CONNECT_CALLBACK_TAG, msg);
         }
