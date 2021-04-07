@@ -156,7 +156,7 @@ public class ConnectivityManagerFacade extends RpcReceiver {
         private long mCreateTimestamp;
 
         public NetworkCallback(int events) {
-            super();
+            super(ConnectivityManager.NetworkCallback.FLAG_INCLUDE_LOCATION_INFO);
             mEvents = events;
             mId = this.toString();
             mCreateTimestamp = System.currentTimeMillis();
@@ -1088,5 +1088,8 @@ public class ConnectivityManagerFacade extends RpcReceiver {
     @Override
     public void shutdown() {
         connectivityStopTrackingConnectivityStateChange();
+        for (NetworkCallback networkCallback : mNetworkCallbackMap.values()) {
+            mManager.unregisterNetworkCallback(networkCallback);
+        }
     }
 }
