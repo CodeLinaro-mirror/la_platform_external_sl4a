@@ -28,6 +28,7 @@ import android.uwb.UwbManager;
 
 import com.google.uwb.support.fira.FiraOpenSessionParams;
 import com.google.uwb.support.fira.FiraParams;
+import com.google.uwb.support.fira.FiraRangingReconfigureParams;
 import com.googlecode.android_scripting.Log;
 import com.googlecode.android_scripting.facade.EventFacade;
 import com.googlecode.android_scripting.facade.FacadeManager;
@@ -58,6 +59,8 @@ public class UwbManagerFacade extends RpcReceiver {
     private final EventFacade mEventFacade;
     private static HashMap<String, RangingSessionCallback> sRangingSessionCallbackMap =
             new HashMap<String, RangingSessionCallback>();
+    private static HashMap<String, UwbAdapterStateCallback> sUwbAdapterStateCallbackMap =
+            new HashMap<String, UwbAdapterStateCallback>();
 
     private enum Event {
         Invalid(0),
@@ -94,37 +97,52 @@ public class UwbManagerFacade extends RpcReceiver {
         }
     }
 
+    private static class UwbAdapterStateCallback implements UwbManager.AdapterStateCallback {
+
+        private final String mId;
+        private final EventFacade mEventFacade;
+
+        UwbAdapterStateCallback(EventFacade eventFacade) {
+            mId = this.toString();
+            mEventFacade = eventFacade;
+        }
+
+        public String toString(int state) {
+            switch (state) {
+                case 1: return "Inactive";
+                case 2: return "Active";
+                default: return "Disabled";
+            }
+        }
+
+        @Override
+        public void onStateChanged(int state, int reason) {
+            Log.d(TAG + "UwbAdapterStateCallback#onStateChanged() called");
+            Log.d(TAG + "Adapter state changed reason " + String.valueOf(reason));
+            mEventFacade.postEvent(
+                    UwbConstants.EventUwbAdapterStateCallback,
+                    new UwbEvents.UwbAdapterStateEvent(mId, toString(state)));
+        }
+    }
+
+
     class RangingSessionCallback implements RangingSession.Callback {
 
         public RangingSession rangingSession;
         public PersistableBundle persistableBundle;
         public PersistableBundle sessionInfo;
         public RangingReport rangingReport;
-        private int mEvents;
         public String mId;
 
         RangingSessionCallback(int events) {
-            mEvents = events;
             mId = this.toString();
-        }
-
-        public void startListeningForEvents(int events) {
-            mEvents |= events & Event.EventAll.getType();
-        }
-
-        public void stopListeningForEvents(int events) {
-            mEvents &= ~(events & Event.EventAll.getType());
         }
 
         private void handleEvent(Event e) {
             Log.d(TAG + "RangingSessionCallback#handleEvent() for " + e.toString());
-            if ((mEvents & e.getType()) == e.getType()) {
-                if ((mEvents & e.getType()) == e.getType()) {
-                    mEventFacade.postEvent(
-                            UwbConstants.EventRangingSessionCallback,
-                            new UwbEvents.RangingSessionEvent(mId, e.toString()));
-                }
-            }
+            mEventFacade.postEvent(
+                    UwbConstants.EventRangingSessionCallback,
+                    new UwbEvents.RangingSessionEvent(mId, e.toString()));
         }
 
         @Override
@@ -204,40 +222,6 @@ public class UwbManagerFacade extends RpcReceiver {
         }
     }
 
-    /**
-     * Start listening for a ranging session event
-     * @param key : hash key of {@link RangingSessionCallback}
-     * @param eventString : type of ranging session event.
-     * @return True if listening for event successful, false if not
-     */
-    @Rpc(description = "start listening for RangingSession Event")
-    public Boolean rangingSessionStartListeningForEvent(String key, String eventString) {
-        RangingSessionCallback mRangingSessionCallback = sRangingSessionCallbackMap.get(key);
-        int event = Event.valueOf(eventString).getType();
-        if (mRangingSessionCallback == null || event == Event.Invalid.getType()) {
-            return false;
-        }
-        mRangingSessionCallback.startListeningForEvents(event);
-        return true;
-    }
-
-    /**
-     * Stop listening for a ranging session event
-     * @param key : hash key of {@link RangingSessionCallback}
-     * @param eventString : type of ranging session event.
-     * @return True if listening event successful, false if not
-     */
-    @Rpc(description = "stop listening for RangingSession Event")
-    public Boolean rangingSessionStopListeningForEvent(String key, String eventString) {
-        RangingSessionCallback mRangingSessionCallback = sRangingSessionCallbackMap.get(key);
-        int event = Event.valueOf(eventString).getType();
-        if (mRangingSessionCallback == null || event == Event.Invalid.getType()) {
-            return false;
-        }
-        mRangingSessionCallback.stopListeningForEvents(event);
-        return true;
-    }
-
     public UwbManagerFacade(FacadeManager manager) {
         super(manager);
         mService = manager.getService();
@@ -273,6 +257,28 @@ public class UwbManagerFacade extends RpcReceiver {
     }
 
     /**
+     * Register uwb adapter state callback.
+     */
+    @Rpc(description = "Register uwb adapter state callback")
+    public String registerUwbAdapterStateCallback() {
+        UwbAdapterStateCallback uwbAdapterStateCallback = new UwbAdapterStateCallback(mEventFacade);
+        String key = uwbAdapterStateCallback.mId;
+        sUwbAdapterStateCallbackMap.put(key, uwbAdapterStateCallback);
+        mUwbManager.registerAdapterStateCallback(mExecutor, uwbAdapterStateCallback);
+        return key;
+    }
+
+    /**
+     * Unregister uwb adapter state callback.
+     */
+    @Rpc(description = "Unregister uwb adapter state callback.")
+    public void unregisterUwbAdapterStateCallback(String key) {
+        UwbAdapterStateCallback uwbAdapterStateCallback = sUwbAdapterStateCallbackMap.get(key);
+        mUwbManager.unregisterAdapterStateCallback(uwbAdapterStateCallback);
+        sUwbAdapterStateCallbackMap.remove(key);
+    }
+
+    /**
      * Get UWB specification info.
      */
     @Rpc(description = "Get Uwb specification info")
@@ -291,23 +297,44 @@ public class UwbManagerFacade extends RpcReceiver {
         return bArray;
     }
 
+    private FiraRangingReconfigureParams generateFiraRangingReconfigureParams(JSONObject j)
+            throws JSONException {
+        if (j == null) {
+            return null;
+        }
+        FiraRangingReconfigureParams.Builder builder = new FiraRangingReconfigureParams.Builder();
+        if (j.has("action")) {
+            builder.setAction(j.getInt("action"));
+        }
+        if (j.has("addressList")) {
+            JSONArray jArray = j.getJSONArray("addressList");
+            UwbAddress[] addressList = new UwbAddress[jArray.length()];
+            for (int i = 0; i < jArray.length(); i++) {
+                addressList[i] = UwbAddress.fromBytes(
+                        convertJSONArrayToByteArray(jArray.getJSONArray(i)));
+            }
+            builder.setAddressList(addressList);
+        }
+        return builder.build();
+    }
+
     private FiraOpenSessionParams generateFiraOpenSessionParams(JSONObject j) throws JSONException {
         if (j == null) {
             return null;
         }
         FiraOpenSessionParams.Builder builder = new FiraOpenSessionParams.Builder();
         builder.setProtocolVersion(FiraParams.PROTOCOL_VERSION_1_1);
+        if (j.has("sessionId")) {
+            builder.setSessionId(j.getInt("sessionId"));
+        }
         if (j.has("deviceType")) {
             builder.setDeviceType(j.getInt("deviceType"));
         }
         if (j.has("deviceRole")) {
             builder.setDeviceRole(j.getInt("deviceRole"));
         }
-        if (j.has("sessionId")) {
-            builder.setSessionId(j.getInt("sessionId"));
-        }
-        if (j.has("channel")) {
-            builder.setChannelNumber(j.getInt("channel"));
+        if (j.has("rangingRoundUsage")) {
+            builder.setRangingRoundUsage(j.getInt("rangingRoundUsage"));
         }
         if (j.has("multiNodeMode")) {
             builder.setMultiNodeMode(j.getInt("multiNodeMode"));
@@ -327,6 +354,42 @@ public class UwbManagerFacade extends RpcReceiver {
             }
             builder.setDestAddressList(Arrays.asList(destinationUwbAddresses));
         }
+        if (j.has("initiationTimeMs")) {
+            builder.setInitiationTimeMs(j.getInt("initiationTimeMs"));
+        }
+        if (j.has("slotDurationRstu")) {
+            builder.setSlotDurationRstu(j.getInt("slotDurationRstu"));
+        }
+        if (j.has("slotsPerRangingRound")) {
+            builder.setSlotsPerRangingRound(j.getInt("slotsPerRangingRound"));
+        }
+        if (j.has("rangingIntervalMs")) {
+            builder.setRangingIntervalMs(j.getInt("rangingIntervalMs"));
+        }
+        if (j.has("blockStrideLength")) {
+            builder.setBlockStrideLength(j.getInt("blockStrideLength"));
+        }
+        if (j.has("hoppingMode")) {
+            builder.setHoppingMode(j.getInt("hoppingMode"));
+        }
+        if (j.has("maxRangingRoundRetries")) {
+            builder.setMaxRangingRoundRetries(j.getInt("maxRangingRoundRetries"));
+        }
+        if (j.has("sessionPriority")) {
+            builder.setSessionPriority(j.getInt("sessionPriority"));
+        }
+        if (j.has("macAddressMode")) {
+            builder.setMacAddressMode(j.getInt("macAddressMode"));
+        }
+        if (j.has("inBandTerminationAttemptCount")) {
+            builder.setInBandTerminationAttemptCount(j.getInt("inBandTerminationAttemptCount"));
+        }
+        if (j.has("channel")) {
+            builder.setChannelNumber(j.getInt("channel"));
+        }
+        if (j.has("preamble")) {
+            builder.setPreambleCodeIndex(j.getInt("preamble"));
+        }
         if (j.has("vendorId")) {
             JSONArray jArray = j.getJSONArray("vendorId");
             byte[] bArray = convertJSONArrayToByteArray(jArray);
@@ -337,6 +400,10 @@ public class UwbManagerFacade extends RpcReceiver {
             byte[] bArray = convertJSONArrayToByteArray(jArray);
             builder.setStaticStsIV(bArray);
         }
+        if (j.has("aoaResultRequest")) {
+            builder.setAoaResultRequest(j.getInt("aoaResultRequest"));
+        }
+
         return builder.build();
     }
 
@@ -363,6 +430,17 @@ public class UwbManagerFacade extends RpcReceiver {
     public void startRangingSession(String key) {
         RangingSessionCallback rangingSessionCallback = sRangingSessionCallbackMap.get(key);
         rangingSessionCallback.rangingSession.start(new PersistableBundle());
+    }
+
+    /**
+     * Reconfigures UWB ranging session.
+     */
+    @Rpc(description = "Reconfigure UWB ranging session")
+    public void reconfigureRangingSession(String key,
+            @RpcParameter(name = "config") JSONObject config) throws JSONException {
+        RangingSessionCallback rangingSessionCallback = sRangingSessionCallbackMap.get(key);
+        FiraRangingReconfigureParams params = generateFiraRangingReconfigureParams(config);
+        rangingSessionCallback.rangingSession.reconfigure(params.toBundle());
     }
 
     private RangingMeasurement getRangingMeasurement(String key, JSONArray jArray)
