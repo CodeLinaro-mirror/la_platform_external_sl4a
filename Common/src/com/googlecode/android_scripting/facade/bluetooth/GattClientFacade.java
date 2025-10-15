@@ -119,7 +119,7 @@ public class GattClientFacade extends RpcReceiver {
             if (phy == null) phy = BluetoothDevice.PHY_LE_1M;
 
             BluetoothGatt mBluetoothGatt = device.connectGatt(mService.getApplicationContext(),
-                    autoConnect, mGattCallbackList.get(index), transport, opportunistic, phy, null);
+                    autoConnect, transport, opportunistic, phy, null, mGattCallbackList.get(index));
             BluetoothGattCount += 1;
             mBluetoothGattList.put(BluetoothGattCount, mBluetoothGatt);
             return BluetoothGattCount;
